@@ -32,12 +32,42 @@ async def list_instances(zone: str | None = None) -> List[Dict[str, Any]]:
     target_zone = zone or settings.default_zone
     logger.info(f"Listing instances in zone: {target_zone}")
 
-    # TODO: Implement instance listing using compute_v1.InstancesClient
-    # client = get_compute_client()
-    # instances = client.list(project=settings.gcp_project_id, zone=target_zone)
+    try:
+        client = compute_v1.InstancesClient()
+        instances = client.list(
+            project=settings.gcp_project_id,
+            zone=target_zone
+        )
 
-    # Placeholder return
-    return []
+        result = []
+        for instance in instances:
+            # Extract external IP
+            external_ip = None
+            internal_ip = None
+            if instance.network_interfaces:
+                network_interface = instance.network_interfaces[0]
+                internal_ip = network_interface.network_i_p
+                if network_interface.access_configs:
+                    external_ip = network_interface.access_configs[0].nat_i_p
+
+            # Extract machine type (just the type name)
+            machine_type = instance.machine_type.split('/')[-1] if instance.machine_type else None
+
+            result.append({
+                "name": instance.name,
+                "status": instance.status,
+                "machine_type": machine_type,
+                "zone": target_zone,
+                "external_ip": external_ip,
+                "internal_ip": internal_ip,
+            })
+
+        logger.info(f"Found {len(result)} instances in {target_zone}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to list instances in {target_zone}: {str(e)}")
+        return []
 
 
 async def start_instance(instance_name: str, zone: str | None = None) -> Dict[str, str]:
@@ -91,16 +121,50 @@ async def get_instance_details(instance_name: str, zone: str | None = None) -> D
         zone: GCP zone where the instance is located. Defaults to settings.default_zone.
 
     Returns:
-        Detailed instance information including configuration, status, and metadata.
+        Detailed instance information including configuration, status, external IP, and metadata.
     """
     target_zone = zone or settings.default_zone
     logger.info(f"Getting details for instance {instance_name} in zone: {target_zone}")
 
-    # TODO: Implement instance details retrieval using compute_v1.InstancesClient
-    # client = get_compute_client()
-    # instance = client.get(project=settings.gcp_project_id, zone=target_zone, instance=instance_name)
+    try:
+        client = compute_v1.InstancesClient()
+        instance = client.get(
+            project=settings.gcp_project_id,
+            zone=target_zone,
+            instance=instance_name
+        )
 
-    return {}
+        # Extract external IP address
+        external_ip = None
+        internal_ip = None
+        if instance.network_interfaces:
+            network_interface = instance.network_interfaces[0]
+            internal_ip = network_interface.network_i_p
+            if network_interface.access_configs:
+                external_ip = network_interface.access_configs[0].nat_i_p
+
+        # Extract machine type (just the type name, not full path)
+        machine_type = instance.machine_type.split('/')[-1] if instance.machine_type else None
+
+        return {
+            "name": instance.name,
+            "status": instance.status,
+            "machine_type": machine_type,
+            "zone": target_zone,
+            "external_ip": external_ip,
+            "internal_ip": internal_ip,
+            "disk_size_gb": instance.disks[0].disk_size_gb if instance.disks else None,
+            "creation_timestamp": instance.creation_timestamp,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get instance details for {instance_name}: {str(e)}")
+        return {
+            "status": "error",
+            "instance_name": instance_name,
+            "error": str(e),
+            "message": f"Failed to get instance details: {str(e)}"
+        }
 
 
 async def create_instance(

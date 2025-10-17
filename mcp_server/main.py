@@ -101,20 +101,23 @@ async def create_instance(
     ssh_username: str = "ubuntu",
 ):
     """
-    Create a new Compute Engine VM instance with optional SSH access.
+    Create a new Compute Engine VM instance with SSH access configured.
+
+    IMPORTANT: For SSH access, you MUST provide an ssh_public_key. Ask the user for their SSH public key first:
+    "To enable SSH access, I'll need your SSH public key. Can you run: cat ~/.ssh/id_rsa.pub (or id_ed25519.pub) and paste the result?"
 
     Args:
         instance_name: Name for the new instance
         zone: GCP zone where to create the instance. Defaults to configured default_zone.
-        machine_type: Machine type for the instance. Defaults to e2-micro.
-        image_family: OS image family to use. Defaults to debian-12.
-        image_project: Project containing the image. Defaults to debian-cloud.
+        machine_type: Machine type for the instance (e.g., e2-micro, e2-medium, e2-standard-2). Defaults to e2-micro.
+        image_family: OS image family to use (e.g., ubuntu-2204-lts, debian-12). Defaults to debian-12.
+        image_project: Project containing the image (e.g., ubuntu-os-cloud, debian-cloud). Defaults to debian-cloud.
         disk_size_gb: Boot disk size in GB. Defaults to 10.
-        ssh_public_key: SSH public key content for access (e.g., 'ssh-rsa AAAA... user@host'). If not provided, use OS Login or add keys later.
+        ssh_public_key: SSH public key content (REQUIRED for SSH access). Format: 'ssh-rsa AAAA... user@host'
         ssh_username: Username for SSH login. Defaults to ubuntu.
 
     Returns:
-        Operation details including operation ID, status, instance info. Use get_instance_details to retrieve the external IP.
+        Operation details. Use get_instance_details(instance_name) to retrieve the external IP address after creation.
     """
     return await compute.create_instance(
         instance_name,
