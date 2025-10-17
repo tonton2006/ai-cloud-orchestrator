@@ -97,9 +97,11 @@ async def create_instance(
     image_family: str = "debian-12",
     image_project: str = "debian-cloud",
     disk_size_gb: int = 10,
+    ssh_public_key: str | None = None,
+    ssh_username: str = "ubuntu",
 ):
     """
-    Create a new Compute Engine VM instance.
+    Create a new Compute Engine VM instance with optional SSH access.
 
     Args:
         instance_name: Name for the new instance
@@ -108,9 +110,11 @@ async def create_instance(
         image_family: OS image family to use. Defaults to debian-12.
         image_project: Project containing the image. Defaults to debian-cloud.
         disk_size_gb: Boot disk size in GB. Defaults to 10.
+        ssh_public_key: SSH public key content for access (e.g., 'ssh-rsa AAAA... user@host'). If not provided, use OS Login or add keys later.
+        ssh_username: Username for SSH login. Defaults to ubuntu.
 
     Returns:
-        Operation details including operation ID, status, and instance info.
+        Operation details including operation ID, status, instance info. Use get_instance_details to retrieve the external IP.
     """
     return await compute.create_instance(
         instance_name,
@@ -119,6 +123,8 @@ async def create_instance(
         image_family,
         image_project,
         disk_size_gb,
+        ssh_public_key,
+        ssh_username,
     )
 
 

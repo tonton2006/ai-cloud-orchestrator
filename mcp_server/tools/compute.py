@@ -110,6 +110,8 @@ async def create_instance(
     image_family: str = "debian-12",
     image_project: str = "debian-cloud",
     disk_size_gb: int = 10,
+    ssh_public_key: str | None = None,
+    ssh_username: str = "ubuntu",
 ) -> Dict[str, Any]:
     """
     Create a new Compute Engine VM instance.
@@ -121,9 +123,13 @@ async def create_instance(
         image_family: OS image family to use. Defaults to debian-12.
         image_project: Project containing the image. Defaults to debian-cloud.
         disk_size_gb: Boot disk size in GB. Defaults to 10.
+        ssh_public_key: SSH public key content to add for access. Format: 'ssh-rsa AAAA... user@host'
+        ssh_username: Username for SSH access. Defaults to ubuntu.
 
     Returns:
-        Operation details including operation ID, status, and instance info.
+        Operation details including operation ID, status, instance info, and external IP.
+
+    Note: For production use, consider migrating to OS Login for IAM-based SSH access.
     """
     target_zone = zone or settings.default_zone
     logger.info(
@@ -165,6 +171,18 @@ async def create_instance(
         instance.disks = [disk]
         instance.network_interfaces = [network_interface]
 
+        # Add SSH key to metadata if provided
+        if ssh_public_key:
+            metadata = compute_v1.Metadata()
+            metadata.items = [
+                compute_v1.Items(
+                    key="ssh-keys",
+                    value=f"{ssh_username}:{ssh_public_key}"
+                )
+            ]
+            instance.metadata = metadata
+            logger.info(f"Added SSH key for user: {ssh_username}")
+
         # Create the instance
         operation = client.insert(
             project=settings.gcp_project_id,
@@ -176,7 +194,9 @@ async def create_instance(
             f"Instance creation initiated: {instance_name}, operation: {operation.name}"
         )
 
-        return {
+        # Wait a moment for the instance to get an IP (optional - can be made async)
+        # For now, return immediately and user can get IP with get_instance_details
+        result = {
             "status": "pending",
             "operation_id": operation.name,
             "instance_name": instance_name,
@@ -184,6 +204,13 @@ async def create_instance(
             "machine_type": machine_type,
             "message": f"Create operation initiated for {instance_name}",
         }
+
+        if ssh_public_key:
+            result["ssh_configured"] = True
+            result["ssh_username"] = ssh_username
+            result["note"] = "Use get_instance_details to retrieve the external IP once the instance is running"
+
+        return result
 
     except Exception as e:
         logger.error(f"Failed to create instance {instance_name}: {str(e)}")
