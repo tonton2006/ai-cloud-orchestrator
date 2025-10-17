@@ -44,6 +44,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the MCP server with uvicorn
+# Run the MCP server with FastMCP's built-in server
 # Cloud Run will inject PORT env var, defaulting to 8080
-CMD ["python", "-m", "uvicorn", "mcp_server.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["python", "-m", "mcp_server.main"]
