@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 
 from .config import settings
 from .utils.logger import get_logger
-from .tools import compute, cloudrun, resources
+from .tools import compute, cloudrun, resources, firewall
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -286,6 +286,93 @@ async def search_resources(query: str):
         List of matching resources with their type and key details.
     """
     return await resources.search_resources(query)
+
+
+# Firewall tools
+@mcp.tool()
+async def create_firewall_rule(
+    rule_name: str,
+    ports: list[str],
+    protocol: str = "tcp",
+    source_ranges: list[str] | None = None,
+    target_tags: list[str] | None = None,
+    description: str | None = None
+):
+    """
+    Create a firewall rule to allow incoming traffic.
+
+    Common use cases:
+    - Minecraft server: ports=["25565"], protocol="tcp"
+    - Web server: ports=["80", "443"], protocol="tcp"
+    - Custom app: ports=["8080"], protocol="tcp"
+
+    Args:
+        rule_name: Name for the firewall rule (e.g., "allow-minecraft")
+        ports: List of ports to allow (e.g., ["25565", "80", "443"])
+        protocol: Protocol to allow (tcp, udp, icmp). Defaults to tcp.
+        source_ranges: Source IP ranges in CIDR notation. Defaults to ["0.0.0.0/0"] (allow all IPs).
+        target_tags: Network tags to apply rule to (e.g., ["minecraft"]). If not specified, applies to all instances.
+        description: Optional description for the rule
+
+    Returns:
+        Operation status and firewall rule details
+    """
+    return await firewall.create_firewall_rule(
+        rule_name,
+        ports,
+        protocol,
+        source_ranges,
+        target_tags,
+        description
+    )
+
+
+@mcp.tool()
+async def delete_firewall_rule(rule_name: str):
+    """
+    Delete a firewall rule.
+
+    Args:
+        rule_name: Name of the firewall rule to delete
+
+    Returns:
+        Deletion status
+    """
+    return await firewall.delete_firewall_rule(rule_name)
+
+
+@mcp.tool()
+async def list_firewall_rules():
+    """
+    List all firewall rules in the project.
+
+    Returns:
+        List of firewall rules with their configurations (ports, protocols, source ranges, tags)
+    """
+    return await firewall.list_firewall_rules()
+
+
+@mcp.tool()
+async def add_tags_to_instance(
+    instance_name: str,
+    tags: list[str],
+    zone: str | None = None
+):
+    """
+    Add network tags to an instance to apply firewall rules.
+
+    Network tags are used to selectively apply firewall rules to specific instances.
+    For example, add tag "minecraft" to an instance, then create a firewall rule with target_tags=["minecraft"].
+
+    Args:
+        instance_name: Name of the instance
+        tags: List of tags to add (e.g., ["minecraft", "web-server"])
+        zone: GCP zone where the instance is located. Defaults to configured default_zone.
+
+    Returns:
+        Operation status with updated tag list
+    """
+    return await firewall.add_tags_to_instance(instance_name, tags, zone)
 
 
 if __name__ == "__main__":
