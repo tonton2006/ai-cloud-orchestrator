@@ -89,6 +89,54 @@ async def get_instance_details(instance_name: str, zone: str | None = None):
     return await compute.get_instance_details(instance_name, zone)
 
 
+@mcp.tool()
+async def create_instance(
+    instance_name: str,
+    zone: str | None = None,
+    machine_type: str = "e2-micro",
+    image_family: str = "debian-12",
+    image_project: str = "debian-cloud",
+    disk_size_gb: int = 10,
+):
+    """
+    Create a new Compute Engine VM instance.
+
+    Args:
+        instance_name: Name for the new instance
+        zone: GCP zone where to create the instance. Defaults to configured default_zone.
+        machine_type: Machine type for the instance. Defaults to e2-micro.
+        image_family: OS image family to use. Defaults to debian-12.
+        image_project: Project containing the image. Defaults to debian-cloud.
+        disk_size_gb: Boot disk size in GB. Defaults to 10.
+
+    Returns:
+        Operation details including operation ID, status, and instance info.
+    """
+    return await compute.create_instance(
+        instance_name,
+        zone,
+        machine_type,
+        image_family,
+        image_project,
+        disk_size_gb,
+    )
+
+
+@mcp.tool()
+async def delete_instance(instance_name: str, zone: str | None = None):
+    """
+    Delete a Compute Engine VM instance.
+
+    Args:
+        instance_name: Name of the instance to delete
+        zone: GCP zone where the instance is located. Defaults to configured default_zone.
+
+    Returns:
+        Operation details including operation ID and status.
+    """
+    return await compute.delete_instance(instance_name, zone)
+
+
 # Cloud Run tools
 @mcp.tool()
 async def list_services(region: str | None = None):
