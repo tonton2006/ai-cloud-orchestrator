@@ -11,6 +11,7 @@ from google.cloud import compute_v1
 from ..config import settings
 from ..utils.logger import get_logger
 from ..utils.gcp_auth import get_compute_client
+from ..utils.labels import merge_labels
 
 logger = get_logger(__name__)
 
@@ -176,9 +177,12 @@ async def create_instance(
     disk_size_gb: int = 10,
     ssh_public_key: str | None = None,
     ssh_username: str = "ubuntu",
+    enable_os_login: bool = True,
+    labels: Dict[str, str] | None = None,
+    ttl: str = "7d",
 ) -> Dict[str, Any]:
     """
-    Create a new Compute Engine VM instance.
+    Create a new Compute Engine VM instance with automatic labeling for resource management.
 
     Args:
         instance_name: Name for the new instance
@@ -188,18 +192,35 @@ async def create_instance(
         image_project: Project containing the image. Defaults to debian-cloud.
         disk_size_gb: Boot disk size in GB. Defaults to 10.
         ssh_public_key: SSH public key content to add for access. Format: 'ssh-rsa AAAA... user@host'
+                       Note: This is ignored when enable_os_login=True (OS Login manages keys automatically)
         ssh_username: Username for SSH access. Defaults to ubuntu.
+                     Note: This is ignored when enable_os_login=True (OS Login uses IAM-based usernames)
+        enable_os_login: Enable OS Login for IAM-based SSH access. Defaults to True.
+                        When enabled, SSH access is managed via IAM roles instead of SSH key metadata.
+        labels: Custom labels to add to the VM (optional). Will be merged with automatic labels.
+        ttl: Time-to-live for auto-cleanup (e.g., "7d", "30d", "never"). Defaults to "7d".
 
     Returns:
         Operation details including operation ID, status, instance info, and external IP.
 
-    Note: For production use, consider migrating to OS Login for IAM-based SSH access.
+    Note: OS Login is the recommended approach for production use. It provides IAM-based access control,
+          automatic key management, audit trails, and team-friendly access management.
+
+    Auto-labeling: All VMs are automatically labeled with:
+        - managed-by: "mcp" (indicates MCP-managed resource)
+        - owner: "aglass1987-at-gmail-com" (owner email)
+        - created-at: UTC timestamp (YYYYMMDD-HHMMSS)
+        - ttl: Time-to-live for cleanup (configurable)
     """
     target_zone = zone or settings.default_zone
     logger.info(
         f"Creating instance {instance_name} in zone: {target_zone} "
         f"with machine type: {machine_type}"
     )
+
+    # Merge user labels with default labels for auto-cleanup
+    merged_labels = merge_labels(labels, ttl)
+    logger.info(f"Applying labels to instance {instance_name}: {merged_labels}")
 
     try:
         client = compute_v1.InstancesClient()
@@ -235,17 +256,35 @@ async def create_instance(
         instance.disks = [disk]
         instance.network_interfaces = [network_interface]
 
-        # Add SSH key to metadata if provided
-        if ssh_public_key:
-            metadata = compute_v1.Metadata()
-            metadata.items = [
+        # Apply labels for automatic resource management
+        instance.labels = merged_labels
+
+        # Configure metadata for SSH access
+        metadata_items = []
+
+        if enable_os_login:
+            # Enable OS Login for IAM-based SSH access
+            metadata_items.append(
+                compute_v1.Items(
+                    key="enable-oslogin",
+                    value="TRUE"
+                )
+            )
+            logger.info("OS Login enabled - SSH access will be managed via IAM roles")
+        elif ssh_public_key:
+            # Fallback to SSH key metadata (legacy approach)
+            metadata_items.append(
                 compute_v1.Items(
                     key="ssh-keys",
                     value=f"{ssh_username}:{ssh_public_key}"
                 )
-            ]
+            )
+            logger.info(f"SSH key metadata added for user: {ssh_username}")
+
+        if metadata_items:
+            metadata = compute_v1.Metadata()
+            metadata.items = metadata_items
             instance.metadata = metadata
-            logger.info(f"Added SSH key for user: {ssh_username}")
 
         # Create the instance
         operation = client.insert(
@@ -269,9 +308,14 @@ async def create_instance(
             "message": f"Create operation initiated for {instance_name}",
         }
 
-        if ssh_public_key:
+        if enable_os_login:
+            result["os_login_enabled"] = True
+            result["ssh_access_method"] = "IAM-based (OS Login)"
+            result["note"] = "Use get_instance_details to retrieve the external IP. SSH access is managed via IAM roles."
+        elif ssh_public_key:
             result["ssh_configured"] = True
             result["ssh_username"] = ssh_username
+            result["ssh_access_method"] = "SSH key metadata"
             result["note"] = "Use get_instance_details to retrieve the external IP once the instance is running"
 
         return result

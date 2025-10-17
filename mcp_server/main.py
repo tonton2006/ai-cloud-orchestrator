@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 
 from .config import settings
 from .utils.logger import get_logger
-from .tools import compute, cloudrun, resources, firewall
+from .tools import compute, cloudrun, resources, firewall, cleanup
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -99,12 +99,31 @@ async def create_instance(
     disk_size_gb: int = 10,
     ssh_public_key: str | None = None,
     ssh_username: str = "ubuntu",
+    enable_os_login: bool = True,
+    labels: dict | None = None,
+    ttl: str = "7d",
 ):
     """
-    Create a new Compute Engine VM instance with SSH access configured.
+    Create a new Compute Engine VM instance with SSH access configured and automatic labeling.
 
-    IMPORTANT: For SSH access, you MUST provide an ssh_public_key. Ask the user for their SSH public key first:
-    "To enable SSH access, I'll need your SSH public key. Can you run: cat ~/.ssh/id_rsa.pub (or id_ed25519.pub) and paste the result?"
+    SSH Access Methods:
+    1. OS Login (RECOMMENDED - default): IAM-based SSH access with automatic key management.
+       - No SSH keys needed from user
+       - Access controlled via IAM roles (roles/compute.osLogin or roles/compute.osAdminLogin)
+       - Full audit trail in Cloud Logging
+       - Service accounts SSH using OS Login API with temporary keys
+
+    2. SSH Key Metadata (Legacy): Manual SSH key management via VM metadata.
+       - Set enable_os_login=False to use this method
+       - Ask user for their SSH public key: "cat ~/.ssh/id_rsa.pub (or id_ed25519.pub)"
+       - Less secure, no audit trail
+
+    Auto-Labeling (Phase 1):
+    All VMs are automatically labeled for resource tracking and cleanup:
+    - managed-by: "mcp" (indicates MCP-managed resource)
+    - owner: "aglass1987-at-gmail-com" (owner email)
+    - created-at: UTC timestamp (YYYYMMDD-HHMMSS format)
+    - ttl: Time-to-live for cleanup (default: "7d")
 
     Args:
         instance_name: Name for the new instance
@@ -113,8 +132,11 @@ async def create_instance(
         image_family: OS image family to use (e.g., ubuntu-2204-lts, debian-12). Defaults to debian-12.
         image_project: Project containing the image (e.g., ubuntu-os-cloud, debian-cloud). Defaults to debian-cloud.
         disk_size_gb: Boot disk size in GB. Defaults to 10.
-        ssh_public_key: SSH public key content (REQUIRED for SSH access). Format: 'ssh-rsa AAAA... user@host'
-        ssh_username: Username for SSH login. Defaults to ubuntu.
+        ssh_public_key: SSH public key content (only used if enable_os_login=False). Format: 'ssh-rsa AAAA... user@host'
+        ssh_username: Username for SSH login (only used if enable_os_login=False). Defaults to ubuntu.
+        enable_os_login: Enable OS Login for IAM-based SSH access. Defaults to True (recommended).
+        labels: Custom labels to add to the VM (optional). Will be merged with automatic labels.
+        ttl: Time-to-live for auto-cleanup (e.g., "7d", "30d", "never"). Defaults to "7d".
 
     Returns:
         Operation details. Use get_instance_details(instance_name) to retrieve the external IP address after creation.
@@ -128,6 +150,9 @@ async def create_instance(
         disk_size_gb,
         ssh_public_key,
         ssh_username,
+        enable_os_login,
+        labels,
+        ttl,
     )
 
 
@@ -170,10 +195,19 @@ async def deploy_service(
     cpu: str = "1",
     min_instances: int = 0,
     max_instances: int = 100,
-    env_vars: dict | None = None
+    env_vars: dict | None = None,
+    labels: dict | None = None,
+    ttl: str = "7d",
 ):
     """
-    Deploy a new Cloud Run service or update an existing one.
+    Deploy a new Cloud Run service or update an existing one with automatic labeling.
+
+    Auto-Labeling (Phase 1):
+    All Cloud Run services are automatically labeled for resource tracking and cleanup:
+    - managed-by: "mcp" (indicates MCP-managed resource)
+    - owner: "aglass1987-at-gmail-com" (owner email)
+    - created-at: UTC timestamp (YYYYMMDD-HHMMSS format)
+    - ttl: Time-to-live for cleanup (default: "7d")
 
     Args:
         service_name: Name of the Cloud Run service
@@ -184,6 +218,8 @@ async def deploy_service(
         min_instances: Minimum number of instances to keep running. Defaults to 0.
         max_instances: Maximum number of instances to scale to. Defaults to 100.
         env_vars: Environment variables as key-value pairs. Defaults to None.
+        labels: Custom labels to add to the service (optional). Will be merged with automatic labels.
+        ttl: Time-to-live for auto-cleanup (e.g., "7d", "30d", "never"). Defaults to "7d".
 
     Returns:
         Deployment status and service URL.
@@ -196,7 +232,9 @@ async def deploy_service(
         cpu=cpu,
         min_instances=min_instances,
         max_instances=max_instances,
-        env_vars=env_vars
+        env_vars=env_vars,
+        labels=labels,
+        ttl=ttl,
     )
 
 
@@ -373,6 +411,129 @@ async def add_tags_to_instance(
         Operation status with updated tag list
     """
     return await firewall.add_tags_to_instance(instance_name, tags, zone)
+
+
+# Resource Cleanup Tools (Phase 2)
+@mcp.tool()
+async def cleanup_expired_instances(
+    zone: str | None = None,
+    dry_run: bool = False
+):
+    """
+    Clean up expired Compute Engine VM instances based on TTL labels.
+
+    Automatically scans and deletes instances where:
+    - managed-by label is "mcp"
+    - Current time exceeds (created-at + ttl)
+    - TTL is not "never"
+
+    Args:
+        zone: GCP zone to scan. Defaults to configured default_zone.
+        dry_run: If True, only report what would be deleted without actually deleting. Defaults to False.
+
+    Returns:
+        Cleanup summary including:
+        - Total scanned, expired, deleted, and failed counts
+        - List of deleted resource names
+        - List of failed deletions with error messages
+
+    Example:
+        # Preview what would be deleted
+        cleanup_expired_instances(dry_run=True)
+
+        # Actually delete expired instances
+        cleanup_expired_instances(dry_run=False)
+    """
+    return await cleanup.cleanup_expired_instances(zone, dry_run)
+
+
+@mcp.tool()
+async def cleanup_expired_services(
+    region: str | None = None,
+    dry_run: bool = False
+):
+    """
+    Clean up expired Cloud Run services based on TTL labels.
+
+    Automatically scans and deletes services where:
+    - managed-by label is "mcp"
+    - Current time exceeds (created-at + ttl)
+    - TTL is not "never"
+
+    Args:
+        region: GCP region to scan. Defaults to configured gcp_region.
+        dry_run: If True, only report what would be deleted without actually deleting. Defaults to False.
+
+    Returns:
+        Cleanup summary with counts and lists of deleted/failed resources.
+
+    Note: Currently returns not_implemented status until list_services() is fully implemented.
+    """
+    return await cleanup.cleanup_expired_services(region, dry_run)
+
+
+@mcp.tool()
+async def cleanup_all_expired_resources(
+    zone: str | None = None,
+    region: str | None = None,
+    dry_run: bool = False
+):
+    """
+    Clean up all expired resources across Compute Engine and Cloud Run.
+
+    This is a convenience function that runs cleanup for both:
+    - Compute Engine VM instances
+    - Cloud Run services
+
+    Args:
+        zone: GCP zone for Compute Engine instances. Defaults to configured default_zone.
+        region: GCP region for Cloud Run services. Defaults to configured gcp_region.
+        dry_run: If True, only report what would be deleted without actually deleting. Defaults to False.
+
+    Returns:
+        Combined cleanup summary for all resource types with breakdown by service.
+
+    Example:
+        # Preview cleanup across all resources
+        cleanup_all_expired_resources(dry_run=True)
+
+        # Execute cleanup
+        cleanup_all_expired_resources(dry_run=False)
+    """
+    return await cleanup.cleanup_all_expired_resources(zone, region, dry_run)
+
+
+@mcp.tool()
+async def list_expiring_resources(
+    zone: str | None = None,
+    days_until_expiration: int = 7
+):
+    """
+    List resources that will expire within the specified number of days.
+
+    Useful for getting advance warning before resources are automatically cleaned up.
+    Helps with planning and avoiding unexpected deletions.
+
+    Args:
+        zone: GCP zone to scan. Defaults to configured default_zone.
+        days_until_expiration: Number of days to look ahead. Defaults to 7.
+
+    Returns:
+        List of resources expiring soon with:
+        - Resource name, zone, status
+        - Created timestamp and TTL
+        - Expiration timestamp
+        - Days/hours until expiration
+        - Owner information
+
+    Example:
+        # See what will expire in the next 3 days
+        list_expiring_resources(days_until_expiration=3)
+
+        # Get 2-week advance warning
+        list_expiring_resources(days_until_expiration=14)
+    """
+    return await cleanup.list_expiring_resources(zone, days_until_expiration)
 
 
 if __name__ == "__main__":
